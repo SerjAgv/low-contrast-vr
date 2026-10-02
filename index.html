@@ -3,17 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Low-Contrast Target VR</title>
-    <!-- A-Frame Library (поддерживает WebXR из коробки) -->
+    <title>Low-Contrast Target VR (Fixed)</title>
+    <!-- Подключаем A-Frame (все в одном файле) -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
 </head>
 <body>
-    <!-- VR Сцена -->
+    <!-- VR Сцена (VRButton появляется автоматически внизу справа) -->
     <a-scene webxr="requiredFeatures: hit-test, local-floor;">
-        <!-- Камера -->
+        <!-- Настройка Камеры и Контроллеров -->
         <a-entity position="0 1.6 0">
             <a-camera look-controls></a-camera>
-            <!-- Контроллер Quest (Правый/Левый курок) -->
+            <!-- Контроллеры Quest 2 (для обработки нажатия курка) -->
             <a-entity oculus-touch-controls="hand: right" id="rightHand"></a-entity>
             <a-entity oculus-touch-controls="hand: left" id="leftHand"></a-entity>
         </a-entity>
@@ -21,49 +21,54 @@
         <!-- Задний фон (Экран) -->
         <a-plane id="bgPlane" position="0 1.5 -2" width="4" height="3" color="#000000" material="shader: flat"></a-plane>
 
-        <!-- Целевой шар -->
+        <!-- Целевой шар (мяч) -->
         <a-sphere id="targetBall" position="0 1.5 -1.95" radius="0.06" color="#ffffff" visible="false" material="shader: flat"></a-sphere>
 
-        <!-- Источник света (минимальный) -->
-        <a-sky color="#111111"></a-sky>
+        <!-- Минимальное окружение (черный скайбокс) -->
+        <a-sky color="#050505"></a-sky>
     </a-scene>
 
     <script>
+        // --- Настройки и Метрики ---
         const STAGES = ['WHITE_ON_BLACK', 'GRAY_ON_WHITE', 'CLOSE_GRAYS'];
         let currentStageIndex = 0;
-        let contrastLevel = 1.0;
+        let contrastLevel = 1.0; // От 1.0 (легко) до 0.05 (очень сложно)
         let trialResults = [];
-        const TRIALS_PER_LEVEL = 8;
+        const TRIALS_PER_LEVEL = 8; // Количество попыток перед изменением контраста
         let isWaitingForResponse = false;
         let appearanceTime = 0;
 
+        // --- Ссылки на объекты ---
         const bgPlane = document.querySelector('#bgPlane');
         const targetBall = document.querySelector('#targetBall');
         const rightHand = document.querySelector('#rightHand');
         const leftHand = document.querySelector('#leftHand');
 
-        // Обработка нажатия курка
+        // --- Логика ввода ---
         function onTriggerPressed() {
             if (!isWaitingForResponse) return;
             const reactionTime = performance.now() - appearanceTime;
             recordResult(true, reactionTime);
         }
 
+        // Слушаем нажатие курка на контроллерах
         rightHand.addEventListener('triggerdown', onTriggerPressed);
         leftHand.addEventListener('triggerdown', onTriggerPressed);
-        // Резервный клик для тестирования на ПК
+        // Резервный клик для тестирования на ПК мышью
         window.addEventListener('click', onTriggerPressed);
 
+        // --- Основной цикл теста ---
         function startNextTrial() {
             targetBall.setAttribute('visible', 'false');
             isWaitingForResponse = false;
 
+            // Случайная задержка 1.5 - 3.5 секунды
             const delay = 1500 + Math.random() * 2000;
 
             setTimeout(() => {
                 applyVisualSettings();
 
-                // Случайная позиция в пределах экрана
+                // Случайная позиция мяча в пределах экрана
                 const randomX = (Math.random() - 0.5) * 1.2;
                 const randomY = 1.5 + (Math.random() - 0.5) * 0.8;
                 targetBall.setAttribute('position', `${randomX} ${randomY} -1.95`);
@@ -72,21 +77,23 @@
                 isWaitingForResponse = true;
                 appearanceTime = performance.now();
 
+                // Окно отклика (1.5 сек)
                 setTimeout(() => {
                     if (isWaitingForResponse) {
-                        recordResult(false, 0);
+                        recordResult(false, 0); // Промах
                     }
                 }, 1500);
 
             }, delay);
         }
 
+        // Регистрация результата
         function recordResult(success, reactionTime) {
             isWaitingForResponse = false;
             targetBall.setAttribute('visible', 'false');
             trialResults.push(success);
 
-            console.log(`Попытка: ${success ? 'Успех (' + Math.round(reactionTime) + 'мс)' : 'Промах'}, Контраст: ${contrastLevel.toFixed(2)}`);
+            console.log(`Этап: ${STAGES[currentStageIndex]}, Попытка: ${success ? 'Успех' : 'Промах'}, Контраст: ${contrastLevel.toFixed(2)}`);
 
             if (trialResults.length >= TRIALS_PER_LEVEL) {
                 evaluateProgress();
@@ -95,11 +102,13 @@
             }
         }
 
+        // Оценка прогресса
         function evaluateProgress() {
             const successCount = trialResults.filter(Boolean).length;
             const accuracy = successCount / TRIALS_PER_LEVEL;
 
             if (accuracy >= 0.8) {
+                // Усложняем
                 contrastLevel -= 0.15;
                 if (contrastLevel < 0.05) {
                     advanceStage();
@@ -107,7 +116,8 @@
                     startNextTrial();
                 }
             } else {
-                console.log(`Порог найден! Этап: ${STAGES[currentStageIndex]}, Мин. Контраст: ${contrastLevel.toFixed(2)}`);
+                // Порог найден (меньше 80% точности)
+                console.log(`ПОРОГ НАЙДЕН! Этап: ${STAGES[currentStageIndex]}, Минимальный Контраст: ${contrastLevel.toFixed(2)}`);
                 advanceStage();
             }
             trialResults = [];
@@ -119,10 +129,11 @@
             if (currentStageIndex < STAGES.length) {
                 startNextTrial();
             } else {
-                console.log("Тест завершен!");
+                console.log("ТЕСТ ПОЛНОСТЬЮ ЗАВЕРШЕН!");
             }
         }
 
+        // Расчет цветов для каждого этапа
         function applyVisualSettings() {
             const stage = STAGES[currentStageIndex];
 
@@ -136,13 +147,14 @@
                 targetBall.setAttribute('color', `rgb(${val},${val},${val})`);
             } else if (stage === 'CLOSE_GRAYS') {
                 bgPlane.setAttribute('color', 'rgb(128,128,128)');
-                const val = Math.floor(128 + (contrastLevel * 20));
+                const val = Math.floor(128 + (contrastLevel * 20)); // Микро-разница в цвете
                 targetBall.setAttribute('color', `rgb(${val},${val},${val})`);
             }
         }
 
-        // Старт при входе в сцену
+        // Автоматический старт, как только сцена загрузится
         document.querySelector('a-scene').addEventListener('loaded', () => {
+            console.log("Сцена A-Frame загружена, начинаем тест.");
             startNextTrial();
         });
     </script>
