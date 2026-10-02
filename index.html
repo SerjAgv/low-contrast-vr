@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Low-Contrast Target VR</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        #overlay {
+            position: absolute; top: 20px; left: 20px; color: white; 
+            z-index: 10; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px;
+        }
+    </style>
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/webxr/VRButton.js"></script>
+</head>
+<body>
+    <div id="overlay">
+        <h2>Low-Contrast Target Test</h2>
+        <p id="status">Нажмите "ENTER VR" для начала</p>
+    </div>
+
+    <script>
+        // --- 1. СЦЕНА И РЕНДЕРЕР (Оптимизация под Quest 2) ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25)); // Ограничение разрешения для Quest 2
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+        document.body.appendChild(VRButton.createButton(renderer));
+
+        // --- 2. ОБЪЕКТЫ И МАТЕРИАЛЫ ---
+        // Используем MeshBasicMaterial (Unlit) для отсутствия затрат на освещение и честного контраста
+        const bgGeometry = new THREE.PlaneGeometry(4, 3);
+        const bgMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+        const background = new THREE.Mesh(bgGeometry, bgMaterial);
+        background.position.set(0, 1.5, -2);
+        scene.add(background);
+
+        const targetGeometry = new THREE.SphereGeometry(0.06, 32, 32);
+        const targetMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const targetBall = new THREE.Mesh(targetGeometry, targetMaterial);
+        targetBall.visible = false;
+        scene.add(targetBall);
+
+        // Генерация текстуры шума для 4-го этапа
+        function createNoiseTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            const imgData = ctx.createImageData(256, 256);
+            for (let i = 0; i < imgData.data.length; i += 4) {
+                const val = Math.floor(Math.random() * 255);
+                imgData.data[i] = val; imgData.data[i+1] = val; imgData.data[i+2] = val; imgData.data[i+3] = 255;
+            }
+            ctx.putImageData(imgData, 0, 0);
+            return new THREE.CanvasTexture(canvas);
+        }
+        const noiseTexture = createNoiseTexture();
+
+        // --- 3. СОСТОЯНИЕ И ПРОГРЕССИЯ ---
+        const STAGES = ['WHITE_ON_BLACK', 'GRAY_ON_WHITE', 'CLOSE_GRAYS', 'TEXTURED'];
+        let currentStageIndex = 0;
+        let contrastLevel = 1.0; // От 1.0 (легко) до 0.0 (сложно)
+        
+        let trialResults = [];
+        const TRIALS_PER_LEVEL = 8;
+        let isWaitingForResponse = false;
+        let appearanceTime = 0;
+        let nextTrialTimer = null;
+
+        // --- 4. ВВОД VR (Контроллеры) ---
+        const controller = renderer.xr.getController(0);
+        controller.addEventListener('selectstart', onSelect);
+        scene.add(controller);
+
+        function onSelect() {
+            if (!renderer.xr.isPresenting || !isWaitingForResponse) return;
+
+            const reactionTime = performance.now() - appearanceTime;
+            recordResult(true, reactionTime);
+        }
+
+        // --- 5. ЛОГИКА ТЕСТИРОВАНИЯ ---
+        function startNextTrial() {
+            targetBall.visible = false;
+            isWaitingForResponse = false;
+
+            // Случайная задержка перед появлением стимула (1.5 - 3.5 сек)
+            const delay = 1500 + Math.random() * 2000;
+            
+            nextTrialTimer = setTimeout(() => {
+                applyVisualSettings();
+
+                // Позиционирование мяча в пределах фона
+                targetBall.position.set(
+                    (Math.random() - 0.5) * 1.2,
+                    1.5 + (Math.random() - 0.5) * 0.8,
+                    -1.95
+                );
+
+                targetBall.visible = true;
+                isWaitingForResponse = true;
+                appearanceTime = performance.now();
+
+                // Окно отклика (1.5 секунды)
+                setTimeout(() => {
+                    if (isWaitingForResponse) {
+                        recordResult(false, 0); // Пропуск
+                    }
+                }, 1500);
+
+            }, delay);
+        }
+
+        function recordResult(success, reactionTime) {
+            isWaitingForResponse = false;
+            targetBall.visible = false;
+            trialResults.push(success);
+
+            console.log(`Попытка ${trialResults.length}: ${success ? 'Успех (' + Math.round(reactionTime) + 'мс)' : 'Промах'}, Контраст: ${contrastLevel.toFixed(2)}`);
+
+            if (trialResults.length >= TRIALS_PER_LEVEL) {
+                evaluateProgress();
+            } else {
+                startNextTrial();
+            }
+        }
+
+        function evaluateProgress() {
+            const successCount = trialResults.filter(Boolean).length;
+            const accuracy = successCount / TRIALS_PER_LEVEL;
+
+            console.log(`Результат этапа: ${accuracy * 100}% точности`);
+
+            if (accuracy >= 0.8) {
+                // Если точность ≥ 80%, снижаем контраст
+                contrastLevel -= 0.15;
+                if (contrastLevel < 0.05) {
+                    advanceStage();
+                } else {
+                    startNextTrial();
+                }
+            } else {
+                // Минимальный порог найден
+                console.log(`ПОРОГ НАЙДЕН! Этап: ${STAGES[currentStageIndex]}, Мин. Контраст: ${contrastLevel.toFixed(2)}`);
+                advanceStage();
+            }
+            trialResults = [];
+        }
+
+        function advanceStage() {
+            contrastLevel = 1.0;
+            currentStageIndex++;
+            if (currentStageIndex < STAGES.length) {
+                startNextTrial();
+            } else {
+                console.log("Тестирование полностью завершено!");
+            }
+        }
+
+        function applyVisualSettings() {
+            bgMaterial.map = null;
+            bgMaterial.needsUpdate = true;
+
+            const stage = STAGES[currentStageIndex];
+            let bgColor = new THREE.Color();
+            let ballColor = new THREE.Color();
+
+            switch(stage) {
+                case 'WHITE_ON_BLACK':
+                    bgColor.setRGB(0, 0, 0);
+                    ballColor.setRGB(contrastLevel, contrastLevel, contrastLevel);
+                    break;
+                case 'GRAY_ON_WHITE':
+                    bgColor.setRGB(1, 1, 1);
+                    const val = 1 - (contrastLevel * 0.5);
+                    ballColor.setRGB(val, val, val);
+                    break;
+                case 'CLOSE_GRAYS':
+                    bgColor.setRGB(0.5, 0.5, 0.5);
+                    const delta = contrastLevel * 0.08; // Микро-разница
+                    ballColor.setRGB(0.5 + delta, 0.5 + delta, 0.5 + delta);
+                    break;
+                case 'TEXTURED':
+                    bgMaterial.map = noiseTexture;
+                    bgMaterial.needsUpdate = true;
+                    bgColor.setRGB(1, 1, 1);
+                    const texVal = 0.5 + (contrastLevel * 0.2);
+                    ballColor.setRGB(texVal, texVal, texVal);
+                    break;
+            }
+
+            bgMaterial.color = bgColor;
+            targetMaterial.color = ballColor;
+        }
+
+        // --- 6. ЗАПУСК И АНИМАЦИЯ ---
+        renderer.xr.addEventListener('sessionstart', () => {
+            currentStageIndex = 0;
+            contrastLevel = 1.0;
+            trialResults = [];
+            startNextTrial();
+        });
+
+        renderer.setAnimationLoop(() => {
+            renderer.render(scene, camera);
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
